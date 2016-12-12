@@ -1,0 +1,317 @@
+%   PROGRAMMA PER LEGGERE IN MATLAB VALORI DALLA SERIALE
+%   VALORI MANDATI TRAMITE UART con BUFFER di 2 byte
+%   LEGENDA:
+%   1°byte -> 8 bit: A B B B C C C C, dove A rappresenta stato ON o OFF del
+%   LED selezionato ed indicato da B
+%   B B B: 001 -> LED 1
+%          010 -> LED 2
+%          011 -> LED 3
+%          100 -> LED 4
+%   C C C C: rappresenta la parte alta del risultato della conversione a 12
+%   bit.
+%   Nel 2°byte è trasferita la parte bassa del risultato dell'ADC a 12 bit.
+
+% IF A SERIAL COMMUNICATION IS ALREADY OPENED, IT IS CLOSED HERE
+exist s var
+if  ans
+    fclose(s);
+    delete(s);
+    clear s;
+end
+
+clear all;
+close all
+clc
+
+% SERIAL COMMUNICATION OPENING
+SerialPort='com7'; %serial port
+
+s = serial(SerialPort,'BaudRate',115200)
+
+T=input('Secondi di acquisizione: \n'); % Acquisition TIME
+n_conv=20;
+SAMPLES=2*n_conv*40*T;
+SIGN=zeros(3,SAMPLES);
+VOLT_SIGN=zeros(4,2*n_conv*T*10);
+
+
+% Vrefh=2.89; %Volt
+Vrefh = 3;
+Nbit = 12;
+% ind=1;
+OK=0;
+fopen(s);
+FLAG=0;
+PROVA=zeros(1,n_conv*2);
+
+% VERIFY THE SERIAL COMMUNICATION WORKS PROPERLY
+while ~OK
+    
+    if FLAG == 0
+        for ind=1:n_conv*2
+            A = fread(s,[2 1],'uint8');
+            if bitshift(bitand(A(2),112),-4)<1 || bitshift(bitand(A(2),112),-4) > 4
+                A = fread(s,[1 1],'uint8');
+                A = fread(s,[2 1],'uint8');
+%                 ind = 1;
+            end
+            PROVA(1,ind) = bitshift(bitand(A(2),112),-4);
+        end
+        FLAG = 1;
+    else
+        PROVA(1:(n_conv*2-1))=PROVA(2:n_conv*2);
+        PROVA(n_conv*2)=0;
+        A = fread(s,[2 1],'uint8');
+        PROVA(n_conv*2)=bitshift(bitand(A(2),112),-4);
+    end
+    if (mean(PROVA==4*ones(1,n_conv*2))==1)
+        OK=1;
+    end    
+
+end
+% pause
+
+% STARTING OF THE SERIAL ACQUISITION FROM THE DEVICE
+ind = 1;  
+pos = 1;
+n=0;
+% clear PROVA
+k=1;
+tic
+while ind <= SAMPLES
+    A = fread(s,[2 1],'uint8');
+    % ADC_Result = uint16(bitand(A(2),15))*256 + uint16(A(1));
+    % LED_channel = bitshift(bitand(A(2),112),-4);
+    % LED_status = bitshift(bitand(A(2),128),-7);
+    SIGN(1,ind) = bitshift(bitand(A(2),112),-4);
+    SIGN(2,ind) = bitshift(bitand(A(2),128),-7);
+    SIGN(3,ind) = double(uint16(bitand(A(2),15))*256 + uint16(A(1)))*Vrefh/(2^Nbit);
+    
+    VOLT_SIGN(SIGN(1,ind),n+pos)=SIGN(3,ind);
+    pos = pos +1;
+    if (pos==n_conv*2+1 && SIGN(1,ind)~=4)
+        pos = 1;
+    elseif (pos == n_conv*2+1 && SIGN(1,ind) == 4)
+        pos = 1;
+        n=n+n_conv*2;
+    end     
+   
+    ind = ind+1;
+    t=toc;
+    if t>k*1
+        t
+        k=k+1;
+    end
+end
+t=toc
+% PLOT of RAW SIGNAL for all the LEDs
+figure,plot(SIGN(3,:)); saveas(gcf,'Total Raw Signal','emf');
+figure
+subplot(2,2,1),plot(VOLT_SIGN(1,:))
+subplot(2,2,2),plot(VOLT_SIGN(2,:))
+subplot(2,2,3),plot(VOLT_SIGN(3,:))
+subplot(2,2,4),plot(VOLT_SIGN(4,:))
+saveas(gcf,'Four LED Raw Signals','emf');
+
+fclose(s);
+delete(s);
+clear s;
+
+VOLT_NIRS=zeros(4,n_conv*T*10);
+pos=1;
+n=0;
+for ind = 1:size(SIGN,2)
+   if SIGN(2,ind)~= 0
+       VOLT_NIRS(SIGN(1,ind),n+pos)=SIGN(3,ind);
+       pos = pos+1;
+       if (pos==n_conv+1 && SIGN(1,ind)~=4)
+        pos = 1;
+       elseif (pos == n_conv+1 && SIGN(1,ind) == 4)
+        pos = 1;
+        n=n+n_conv;
+       end 
+   end  
+end
+% PLOT OF THE SIGNALS ACQUIRED WHEN LEDs ARE ON
+figure
+subplot(2,2,1),plot(VOLT_NIRS(1,:)),title('765nm UP')
+subplot(2,2,2),plot(VOLT_NIRS(2,:)),title('850nm UP')
+subplot(2,2,3),plot(VOLT_NIRS(3,:)),title('765nm DOWN')
+subplot(2,2,4),plot(VOLT_NIRS(4,:)),title('850nm DOWN')
+saveas(gcf,'LEDs ON Raw Signal','emf');
+
+VOLT_OFF=zeros(4,n_conv*T*10);
+pos=1;
+n=0;
+for ind = 1:size(SIGN,2)
+   if SIGN(2,ind)== 0
+       VOLT_OFF(SIGN(1,ind),n+pos)=SIGN(3,ind);
+       pos = pos+1;
+       if (pos==n_conv+1 && SIGN(1,ind)~=4)
+        pos = 1;
+       elseif (pos == n_conv+1 && SIGN(1,ind) == 4)
+        pos = 1;
+        n=n+n_conv;
+       end 
+   end  
+end
+
+figure
+subplot(2,2,1),plot(VOLT_OFF(1,:)),title('765nm UP')
+subplot(2,2,2),plot(VOLT_OFF(2,:)),title('850nm UP')
+subplot(2,2,3),plot(VOLT_OFF(3,:)),title('765nm DOWN')
+subplot(2,2,4),plot(VOLT_OFF(4,:)),title('850nm DOWN')
+
+pos=1;
+S1=zeros(1,T*10);
+S2=zeros(1,T*10);
+S3=zeros(1,T*10);
+S4=zeros(1,T*10);
+for i=1:n_conv:(size(VOLT_NIRS,2)-n_conv+1)
+    S1(1,pos)=mean(VOLT_NIRS(1,i:i+n_conv-1));
+    S2(1,pos)=mean(VOLT_NIRS(2,i:i+n_conv-1));
+    S3(1,pos)=mean(VOLT_NIRS(3,i:i+n_conv-1));
+    S4(1,pos)=mean(VOLT_NIRS(4,i:i+n_conv-1));
+    pos=pos+1;
+end
+% PLOT OF THE AVERAGED SIGNAL WITH A SAMPLE RATE EQUAL TO 10 Hz
+L1=length(S2);
+t=0:0.1:(T-1/10);%size(S1,2)/10;
+figure,plot(t,S1,'b',t,S2,'r')
+legend('765nm UP','850nm UP'); 
+saveas(gcf,'10Hz FAR LED signals','emf');
+figure,plot(t,S3,'b',t,S4,'r')
+legend('765nm DOWN','850nm DOWN');
+saveas(gcf,'10Hz NEAR LED Signals','emf'); 
+
+pos=1;
+S1_OFF=zeros(1,T*10);
+S2_OFF=zeros(1,T*10);
+S3_OFF=zeros(1,T*10);
+S4_OFF=zeros(1,T*10);
+for i=1:n_conv:(size(VOLT_OFF,2)-n_conv+1)
+    S1_OFF(1,pos)=mean(VOLT_OFF(1,i:i+n_conv-1));
+    S2_OFF(1,pos)=mean(VOLT_OFF(2,i:i+n_conv-1));
+    S3_OFF(1,pos)=mean(VOLT_OFF(3,i:i+n_conv-1));
+    S4_OFF(1,pos)=mean(VOLT_OFF(4,i:i+n_conv-1));
+    pos=pos+1;
+end
+figure,plot(t,S1_OFF,'b',t,S2_OFF,'r')
+legend('765nm UP','850nm UP'); 
+saveas(gcf,'10Hz FAR LED signals','emf');
+figure,plot(t,S3_OFF,'b',t,S4_OFF,'r')
+legend('765nm DOWN','850nm DOWN');
+title ('SEGNALI LED SPENTI')
+
+% REMOVAL OF THE NOISE TREND COMPUTED WHEN LEDs ARE OFF
+S1_detrend = S1-S1_OFF;
+S2_detrend = S2-S2_OFF;
+S3_detrend = S3-S3_OFF;
+S4_detrend = S4-S4_OFF;
+figure,plot(t,S1_detrend,'b',t,S2_detrend,'r')
+legend('765nm UP','850nm UP'); 
+saveas(gcf,'10Hz FAR LED signals','emf');
+figure,plot(t,S3_detrend,'b',t,S4_detrend,'r')
+legend('765nm DOWN','850nm DOWN');
+title ('SEGNALI CON DETREND DEL RUMORE')
+
+% [b,a]=butter(11,[0.2 2]/5);
+% S1_filt=filter(b,a,S1);
+% S2_filt=filter(b,a,S2);
+% S3_filt=filter(b,a,S3);
+% S4_filt=filter(b,a,S4);
+% [P1,f] = pwelch(S1_filt,hamming(L1),L1/2,L1,10);
+% figure,plot(f,P1/max(P1))
+% [P2,f] = pwelch(S2_filt,hamming(L1),L1/2,L1,10);
+% figure,plot(f,P2/max(P2))
+% [P3,f] = pwelch(S3_filt,hamming(L1),L1/2,L1,10);
+% figure,plot(f,P2/max(P2))
+% [P4,f] = pwelch(S4_filt,hamming(L1),L1/2,L1,10);
+% figure,plot(f,P2/max(P2))
+
+
+% NIRS SIGNAL COMPUTATION BY USING THE LAMBERT BEER LAW
+DPF_850=4.17;
+DPF_765=4.52;
+% alfa_HHb_850 = 1.81; % cm^(-1)*umol^(-1)
+% alfa_O2Hb_850= 2.67; % cm^(-1)*umol^(-1)
+% alfa_HHb_765 = 3.66; % cm^(-1)*umol^(-1)
+% alfa_O2Hb_765= 1.47; % cm^(-1)*umol^(-1)
+
+alfa_HHb_850 =691.29*10^-6; % cm^(-1)*umol^(-1)
+alfa_O2Hb_850= 1058.0*10^-6; % cm^(-1)*umol^(-1)
+alfa_HHb_765 = 1435.5*10^-6; % cm^(-1)*umol^(-1)
+alfa_O2Hb_765= 616.4*10^-6; % cm^(-1)*umol^(-1)
+
+d1 = 3; %cm
+d2 = 2.5; %cm
+
+delta_850_1 = S2-S2(1);
+delta_765_1 = S1-S1(1);
+delta_850_2 = S4-S4(1);
+delta_765_2 = S3-S3(1);
+
+delta_1 = d1^(-1)*[alfa_HHb_765, alfa_O2Hb_765; alfa_HHb_850, alfa_O2Hb_850]^(-1)*[delta_765_1/DPF_765; delta_850_1/DPF_850];
+delta_HHb_1 =delta_1(1,:);
+delta_O2Hb_1=delta_1(2,:);
+
+delta_2 = d2^(-1)*[alfa_HHb_765, alfa_O2Hb_765; alfa_HHb_850, alfa_O2Hb_850]^(-1)*[delta_765_2/DPF_765; delta_850_2/DPF_850];
+delta_HHb_2 =delta_2(1,:);
+delta_O2Hb_2=delta_2(2,:);
+
+figure
+subplot(2,1,1),plot(delta_HHb_1,'b'),hold on,plot(delta_O2Hb_1,'r'),title('FAR LEDs '),legend('HHb','O2Hb')
+axis([0 250 -10 10])
+subplot(2,1,2),plot(delta_HHb_2,'b'),hold on,plot(delta_O2Hb_2,'r'),title('NEAR LEDs'),legend('HHb','O2Hb')
+axis([0 250 -10 10])
+
+% alfa_HHb_850 = 1.81*10^-3; % cm^(-1)*umol^(-1)
+% alfa_O2Hb_850= 2.67*10^-3; % cm^(-1)*umol^(-1)
+% alfa_HHb_765 = 3.66*10^-3; % cm^(-1)*umol^(-1)
+% alfa_O2Hb_765= 1.47*10^-3; % cm^(-1)*umol^(-1)
+
+d1 = 3; %cm
+d2 = 2.5; %cm
+
+% delta_850_1 = diff(S2,1,2);
+% delta_765_1 = diff(S1,1,2);
+% delta_850_2 = diff(S4,1,2);
+% delta_765_2 = diff(S3,1,2);
+
+% delta_850_1 = S2;
+% delta_765_1 = S1;
+% delta_850_2 = S4;
+% delta_765_2 = S3;
+
+% delta_850_1 = S2-S2(1);
+% delta_765_1 = S1-S1(1);
+% delta_850_2 = S4-S4(1);
+% delta_765_2 = S3-S3(1);
+
+delta_850_1 = S2_detrend-S2_detrend(1);
+delta_765_1 = S1_detrend-S1_detrend(1);
+delta_850_2 = S4_detrend-S4_detrend(1);
+delta_765_2 = S3_detrend-S3_detrend(1);
+
+delta_1 = d1^(-1)*[alfa_HHb_765, alfa_O2Hb_765; alfa_HHb_850, alfa_O2Hb_850]^(-1)*[delta_765_1/DPF_765; delta_850_1/DPF_850];
+delta_HHb_1 =delta_1(1,:);
+delta_O2Hb_1=delta_1(2,:);
+
+delta_2 = d1^(-1)*[alfa_HHb_765, alfa_O2Hb_765; alfa_HHb_850, alfa_O2Hb_850]^(-1)*[delta_765_2/DPF_765; delta_850_2/DPF_850];
+delta_HHb_2 =delta_2(1,:);
+delta_O2Hb_2=delta_2(2,:);
+
+figure
+subplot(2,1,1),plot(delta_HHb_1,'b'),hold on,plot(delta_O2Hb_1,'r'),title('FAR LED '),legend('HHb','O2Hb')
+subplot(2,1,2),plot(delta_HHb_2,'b'),hold on,plot(delta_O2Hb_2,'r'),title('NEAR LED'),legend('HHb','O2Hb')
+saveas(gcf,'NIRS_signals','emf');
+
+% [b,a]=butter(11,[0.7 2]/5);
+% S1_filt=filter(b,a,delta_HHb_1);
+% [P1,f] = pwelch(S1_filt,hamming(L1),L1/2,L1,10);
+% figure,plot(f,P1/max(P1))
+
+livello=60; %input('livello forza \n');
+str =clock;
+save(['NIRS_' num2str(livello) '_' num2str(str(1)) '-' num2str(str(2)) '-' num2str(str(3)) '-' num2str(str(4)) '_' num2str(str(5)) '.mat'],'S1','S2','S3','S4');
+save('Recorded_variables.mat','VOLT_SIGN','VOLT_NIRS','VOLT_OFF');
